@@ -165,3 +165,8 @@ dist
 .env*
 !.env.example
 .wrangler/
+CLAUDE.md
+.claude/
+
+# local data exports (never commit raw financial data)
+*.csv

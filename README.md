@@ -1,114 +1,88 @@
 # WeekStart Automation Worker
 
-Cloudflare Worker for WeekStart automations.
+Cloudflare Worker that runs on a weekly schedule and publishes a business scorecard to Linear.
 
 ## What this is
 
-This repository contains a Cloudflare Worker that runs on a weekly schedule (Cron Trigger) and will publish a weekly scorecard into Linear.
+A Cloudflare Worker triggered by a Cron every week. It collects raw data from source systems, computes business metrics, assembles a canonical Scorecard, validates it, and publishes it to Linear. Each failed run sends a structured Discord alert.
 
-Current foundation already implemented:
-- Health endpoint
-- Manual trigger endpoint (authenticated)
-- Scheduled handler
-- Logs and Discord failure alerts
+## Pipeline
 
-## Planned Pipeline (Scorecard)
+```
+collect → calculate → consolidate → test → publish
+```
 
-The delivery pipeline is defined as:
+Each stage has a single responsibility and a stable output contract.
 
-`collect -> calculate -> consolidate -> test -> publish`
+| Stage | Responsibility | Output |
+|---|---|---|
+| **collect** | Fetch and normalize raw data from source APIs | `CollectStageOutput` |
+| **calculate** | Run all business blocks over collected data | `CalculateStageOutput` |
+| **consolidate** | Merge block outputs with run metadata | `Scorecard` |
+| **test** | Validate the Scorecard contract before publishing | throws on failure |
+| **publish** | Render and publish to Linear | _(planned)_ |
 
-Each stage has one clear responsibility and a stable output contract.
+On every successful run a Discord preview embed is sent for human validation before the Linear publish step is implemented.
 
-### 1. Collect
+## Architecture — Block-Based Design
 
-Goal:
-- Fetch raw data from source systems (finance/data lake/infrastructure/other providers).
+Business logic lives in `src/pipeline/blocks/`. Each block is a self-contained module with its own types and pure functions. The calculate stage is a thin orchestrator that calls each block and merges their outputs.
 
-Output:
-- Normalized raw datasets with run metadata (week, source, timestamps).
+Adding a new block (e.g. Block 4 — Costs):
+1. Create `src/pipeline/blocks/costs.ts` with types + `runCostsBlock`.
+2. Import and call it in `src/pipeline/stages/calculate.ts`.
+3. Add a `costs` field to `CalculateStageOutput`.
+4. Uncomment the `costs` line in `src/pipeline/stages/consolidate.ts`.
 
-Examples of planned scope:
-- Revenue: issued invoices / payment status.
-- Infrastructure costs: AWS, GCP, Vercel, Cloudflare cost sources.
+## File Structure
 
-### 2. Calculate
+```
+src/
+├── index.ts                        # Worker entry point, HTTP/cron handlers, Discord embeds
+├── core/
+│   ├── types.ts                    # Collect-layer domain types (CollectRecord, CollectStageOutput, …)
+│   └── date.ts                     # Shared date utilities (toYearMonth, previousMonth, getYearMonth)
+└── pipeline/
+    ├── blocks/
+    │   └── revenue.ts              # Block 3 — Revenue (types + logic, pure functions)
+    └── stages/
+        ├── collect.ts              # Stage 1 — Airtable fetch + normalization
+        ├── calculate.ts            # Stage 2 — Thin orchestrator, calls each block
+        ├── consolidate.ts          # Stage 3 — Assembles Scorecard (Scorecard type lives here)
+        ├── test.ts                 # Stage 4 — Contract validation (throws on failure)
+        └── publish.ts              # Stage 5 — Linear publishing (planned)
 
-Goal:
-- Convert normalized raw data into weekly indicators.
+test/
+├── collect.spec.ts
+├── calculate.spec.ts               # Revenue block tests (unit + integration)
+└── index.spec.ts
+```
 
-Output:
-- Derived metrics per block.
+## Blocks
 
-Examples of planned scope:
-- Revenue: total billed, total received, received percentage, total outstanding, expected receipts.
-- Costs: month-to-date accumulated cost, month-end projection, comparison with previous period.
-- Margin and result: margin, projected revenue, projected cost, expected profit/loss.
-- AI block: trend classification (growth/stability/reduction) and explainability inputs.
+### Block 3 — Revenue (`src/pipeline/blocks/revenue.ts`)
 
-### 3. Consolidate
+Computes accounts-receivable metrics from normalized `CollectRecord[]`.
 
-Goal:
-- Merge all block outputs into one canonical `Scorecard` payload.
+All logic is pure (no I/O, no side effects). Exclusion rules applied before every metric:
+- status `unknown` → excluded (data quality issue)
+- status `canceled` → excluded (guarded for safety)
 
-Output:
-- Single scorecard model with fixed schema for publishing.
+**Metrics (reference month + previous month for comparison):**
 
-Rules:
-- Keep deterministic structure every week.
-- Include run metadata and traceability (runId, references, timestamps).
+| Field | Description |
+|---|---|
+| `billedAmount` | Sum of Valor for records whose NF was emitted (`invoiceCreatedAt`) this month |
+| `receivedAmount` | Sum of Valor for records whose payment was confirmed (`paidDate`) this month |
+| `receivedPct` | `receivedAmount / billedAmount × 100`. `null` when `billedAmount` is zero |
+| `expectedInflow` | Group A: due this month and not yet paid + Group B: overdue from any prior month |
+| `totalOpen` | Snapshot of all `registered`/`overdue` records across all months |
 
-### 4. Test
-
-Goal:
-- Validate the stage outputs and scorecard contract before publication.
-
-Output:
-- Automated test results (unit/integration/contract checks) and publish readiness.
-
-Rules:
-- Publishing only happens after pipeline tests pass.
-- Critical metric/schema regressions must fail the run.
-
-### 5. Publish
-
-Goal:
-- Render and publish the scorecard in the destination channel.
-
-Primary target:
-- Linear document used by WeekStart/Weekend process.
-
-Planned constraints:
-- Same visual/section format every week.
-- Idempotent behavior for reruns (avoid unintended duplicates).
-
-## Roadmap Mapping (Linear sub-issues)
-
-The pipeline supports these planned blocks:
-- Block 3: Revenue
-- Block 4: Infrastructure Costs
-- Block 5: Margin and Result
-- Block 6: AI Block
-- Block 7: Automatic Executive Summary
-- Block 8: Scorecard Publishing
-
-Execution order for delivery:
-1. Orchestrator + pipeline contracts
-2. Revenue
-3. Costs
-4. Margin and result
-5. AI + executive summary
-6. Test coverage and publish gates
-7. Final Linear publishing with standardized layout
-
-## Runtime Flow
-
-1. Worker is triggered by cron or by manual `POST /run`.
-2. A new `runId` is created and logged.
-3. Pipeline stages run in order.
-4. Publish runs only if tests pass.
-5. On failure, worker logs and sends alert to Discord.
-6. Manual rerun can be used for operational recovery.
+### Block 4 — Infrastructure Costs _(planned)_
+### Block 5 — Margin and Result _(planned)_
+### Block 6 — AI Block _(planned)_
+### Block 7 — Automatic Executive Summary _(planned)_
+### Block 8 — Scorecard Publishing _(planned)_
 
 ## Requirements
 
@@ -125,8 +99,6 @@ npm install
 
 ## Local development
 
-Run locally:
-
 ```bash
 npm run dev
 ```
@@ -139,37 +111,48 @@ curl http://localhost:8787/health
 
 ## Manual run (local)
 
-This worker exposes:
-- `POST /run` (requires `Authorization: Bearer <RUN_KEY>`)
-
-Example:
-
 ```bash
 curl -X POST http://localhost:8787/run \
   -H "Authorization: Bearer your-key-here"
 ```
 
+Force an error alert (for testing Discord):
+
+```bash
+curl -X POST "http://localhost:8787/run?forceError=true" \
+  -H "Authorization: Bearer your-key-here"
+```
+
+## Tests
+
+```bash
+npm test
+```
+
+Tests run inside the Cloudflare Workers runtime via `@cloudflare/vitest-pool-workers`.
+
 ## Scheduled runs (cron)
 
-The worker uses Cloudflare Cron Triggers (UTC based).
-
-Current schedule is configured in `wrangler.jsonc`.
+Configured in `wrangler.jsonc`. Uses Cloudflare Cron Triggers (UTC-based).
 
 ## Secrets / Environment Variables
 
 Required:
-- `RUN_KEY`: protects the manual `/run` endpoint.
-- `DISCORD_WEBHOOK_URL`: receives failure alerts.
+- `RUN_KEY` — protects the manual `/run` endpoint.
+- `AIRTABLE_TOKEN` — Airtable Personal Access Token used by the collect stage.
 
 Optional:
-- `WORKER_PUBLIC_URL`: base URL used to build links in alerts.
+- `DISCORD_WEBHOOK_URL` — receives failure alerts and scorecard previews. Worker runs normally without it.
+- `TIMEZONE` — IANA timezone for date calculations. Defaults to `America/Sao_Paulo`.
+- `WORKER_PUBLIC_URL` — base URL used to build links in Discord alerts.
+- `AIRTABLE_BASE_ID` — defaults to `applTenaA2A7ElyNl`.
+- `AIRTABLE_TABLE_ID` — defaults to `tblnpSGZ1jqQhJNnm` (Accounts Receivable).
+- `AIRTABLE_VIEW_ID` — defaults to `viwC8eUcFU9tp01dw` (Pelinsari-CeremonyWorker).
 
 ## Deploy
-
-Deploy is managed via Cloudflare Workers UI (Git integration), or via Wrangler.
-
-Typical Wrangler deploy:
 
 ```bash
 npm run deploy
 ```
+
+Deploy is managed via Cloudflare Workers UI (Git integration) or directly via Wrangler.

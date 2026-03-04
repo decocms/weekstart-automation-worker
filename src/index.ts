@@ -1,9 +1,20 @@
+import { runCollectStage } from "./pipeline/stages/collect";
+import { runCalculateStage } from "./pipeline/stages/calculate";
+import { runConsolidateStage } from "./pipeline/stages/consolidate";
+import { runTestStage } from "./pipeline/stages/test";
+import type { Scorecard } from "./pipeline/stages/consolidate";
+
 export interface Env {
   RUN_KEY: string;
-  DISCORD_WEBHOOK_URL: string;
+  DISCORD_WEBHOOK_URL?: string;
+  WORKER_PUBLIC_URL?: string;
+  TIMEZONE?: string;
 
-  // Optional but useful for nicer links in alerts
-  WORKER_PUBLIC_URL?: string; // e.g. "https://weekstart-automation-worker.deco-cx.workers.dev"
+  // Airtable (Collect stage)
+  AIRTABLE_TOKEN?: string;
+  AIRTABLE_BASE_ID?: string;
+  AIRTABLE_TABLE_ID?: string;
+  AIRTABLE_VIEW_ID?: string;
 }
 
 /**
@@ -15,6 +26,7 @@ type RunSource = "manual" | "cron";
 type RunMeta = {
   source: RunSource;
   atIso: string;
+  forceError?: boolean;
 
   cron?: string;
   scheduledTimeIso?: string;
@@ -93,11 +105,10 @@ function buildFailureEmbed(params: {
   meta: RunMeta;
   errorSummary: string;
   errorStack: string;
-}) {
+}): DiscordEmbed {
   const { env, runId, meta, errorSummary, errorStack } = params;
 
   const baseUrl = getWorkerBaseUrl(env);
-  const title = "WeekStart FAILED";
 
   const fields: DiscordEmbed["fields"] = [
     { name: "runId", value: `\`${runId}\``, inline: true },
@@ -117,35 +128,153 @@ function buildFailureEmbed(params: {
     );
   }
 
-  const stackForDiscord = truncate(errorStack, 1000);
-
-  const embed: DiscordEmbed = {
-    title,
+  return {
+    title: "WeekStart FAILED",
     color: 0xff3b30,
     description: `**Error:** \`${errorSummary}\``,
     fields: [
       ...fields,
       {
         name: "stack (truncated)",
-        value: `\`\`\`\n${stackForDiscord}\n\`\`\``,
+        value: `\`\`\`\n${truncate(errorStack, 1000)}\n\`\`\``,
         inline: false,
       },
     ],
     footer: { text: "weekstart-automation-worker" },
     timestamp: meta.atIso,
   };
+}
 
-  return embed;
+/**
+ * ---------- Scorecard preview embed ----------
+ */
+
+const MONTHS_PT = [
+  "jan", "fev", "mar", "abr", "mai", "jun",
+  "jul", "ago", "set", "out", "nov", "dez",
+];
+
+function fmtBRL(amount: number): string {
+  const fixed = Math.abs(amount).toFixed(2);
+  const [int, dec] = fixed.split(".");
+  const intFmt = int!.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `R$ ${intFmt},${dec}`;
+}
+
+function fmtDelta(prev: number, curr: number): string {
+  if (prev === 0) return curr > 0 ? "novo" : "—";
+  const pct = ((curr - prev) / prev) * 100;
+  const sign = pct >= 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
+function yearMonthLabel(ym: string): string {
+  const month = Number(ym.slice(5, 7));
+  return `${MONTHS_PT[month - 1]}/${ym.slice(0, 4)}`;
+}
+
+function prevYearMonth(ym: string): string {
+  const year = Number(ym.slice(0, 4));
+  const month = Number(ym.slice(5, 7));
+  return month === 1
+    ? `${year - 1}-12`
+    : `${year}-${String(month - 1).padStart(2, "0")}`;
+}
+
+function field(name: string, description: string, value: string, comparison?: string): DiscordEmbed["fields"][number] {
+  return {
+    name: `${name} — ${description}`,
+    value: comparison ? `**${value}**\n${comparison}` : `**${value}**`,
+    inline: false,
+  };
+}
+
+function buildScorecardPreviewEmbed(scorecard: Scorecard): DiscordEmbed {
+  const { revenue } = scorecard;
+  const { current, previous, referenceMonth, totalOpen } = revenue;
+
+  const currLabel = yearMonthLabel(referenceMonth);
+  const prevLabel = yearMonthLabel(prevYearMonth(referenceMonth));
+
+  const cmp = (prev: number, curr: number) =>
+    `vs. ${prevLabel}: ${fmtBRL(prev)} (${fmtDelta(prev, curr)})`;
+
+  return {
+    title: `Finance Overview · ${currLabel}`,
+    description: "Weekly scorecard preview — awaiting approval before publishing.",
+    color: 0x3b82f6,
+    fields: [
+      field(
+        "Invoiced",
+        `Invoices emitted in ${currLabel}`,
+        fmtBRL(current.billedAmount),
+        cmp(previous.billedAmount, current.billedAmount),
+      ),
+      field(
+        "Cash In",
+        `Receivables confirmed in ${currLabel}`,
+        fmtBRL(current.receivedAmount),
+        cmp(previous.receivedAmount, current.receivedAmount),
+      ),
+      field(
+        "Expected Cash In",
+        `All unpaid receivables due on or before end of ${currLabel}`,
+        fmtBRL(current.expectedInflow),
+      ),
+      field(
+        "A/R",
+        "Total outstanding receivables across all months",
+        fmtBRL(totalOpen),
+      ),
+      {
+        name: "runId",
+        value: `\`${scorecard.runId}\``,
+        inline: false,
+      },
+    ],
+    footer: { text: "weekstart-automation-worker · preview" },
+    timestamp: scorecard.generatedAtIso,
+  };
 }
 
 /**
  * ---------- Core job ----------
  */
 
-async function runWeekstartJob(_env: Env, _meta: RunMeta): Promise<void> {
-  if (_meta.cron === "forced-test-error") {
+async function runWeekstartJob(env: Env, meta: RunMeta, runId: string): Promise<void> {
+  if (meta.forceError) {
     throw new Error("Manual forced test error");
   }
+
+  const collect = await runCollectStage({
+    token: env.AIRTABLE_TOKEN ?? "",
+    baseId: env.AIRTABLE_BASE_ID,
+    tableId: env.AIRTABLE_TABLE_ID,
+    viewId: env.AIRTABLE_VIEW_ID,
+    timezone: env.TIMEZONE ?? "America/Sao_Paulo",
+  });
+
+  console.log(
+    "[weekstart] collect completed",
+    JSON.stringify({ totalRecords: collect.records.length, quality: collect.quality })
+  );
+
+  const calculate = runCalculateStage(collect, {
+    timezone: env.TIMEZONE ?? "America/Sao_Paulo",
+  });
+
+  console.log(
+    "[weekstart] calculate completed",
+    JSON.stringify({ referenceMonth: calculate.revenue.referenceMonth })
+  );
+
+  const scorecard = runConsolidateStage(calculate, runId);
+
+  runTestStage(scorecard); // throws if contract is violated
+
+  console.log("[weekstart] scorecard ready", JSON.stringify({ referenceMonth: scorecard.referenceMonth }));
+
+  await sendDiscord(env, { embeds: [buildScorecardPreviewEmbed(scorecard)] });
 }
 
 /**
@@ -159,7 +288,7 @@ async function runWithAlerts(env: Env, meta: RunMeta): Promise<RunOk | RunErr> {
 
   try {
     console.log("[weekstart] start", JSON.stringify({ runId, ...meta }));
-    await runWeekstartJob(env, meta);
+    await runWeekstartJob(env, meta, runId);
     console.log("[weekstart] success", JSON.stringify({ runId, ...meta }));
     return { ok: true, runId };
   } catch (err) {
@@ -227,7 +356,7 @@ export default {
       const result = await runWithAlerts(env, {
         source: "manual",
         atIso: nowIso(),
-        ...(forceError ? { cron: "forced-test-error" } : {}),
+        ...(forceError ? { forceError: true } : {}),
       });
 
       return result.ok ? json(200, result) : json(500, result);
