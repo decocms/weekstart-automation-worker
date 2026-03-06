@@ -27,6 +27,7 @@ function rec(overrides: Partial<CollectRecord> & Pick<CollectRecord, "status">):
     clientName: null,
     referenceMonth: null,
     originalDueDate: null,
+    dueDate: null,
     paidDate: null,
     invoiceNumber: null,
     invoiceCreatedAt: null,
@@ -118,10 +119,10 @@ describe("expectedInflow", () => {
   it("includes registered and overdue due this month, excludes paid and canceled", () => {
     const result = runCalculateStage(
       makeCollect([
-        rec({ status: "registered", originalDueDate: "2026-03-15", amount: 1000 }),
-        rec({ status: "overdue",    originalDueDate: "2026-03-20", amount: 500 }),
-        rec({ status: "paid",       originalDueDate: "2026-03-10", amount: 200 }), // paid → excluded
-        rec({ status: "canceled",   originalDueDate: "2026-03-10", amount: 300 }), // canceled → excluded
+        rec({ status: "registered", dueDate: "2026-03-15", amount: 1000 }),
+        rec({ status: "overdue",    dueDate: "2026-03-20", amount: 500 }),
+        rec({ status: "paid",       dueDate: "2026-03-10", amount: 200 }), // paid → excluded
+        rec({ status: "canceled",   dueDate: "2026-03-10", amount: 300 }), // canceled → excluded
       ]),
       { timezone: TZ, referenceMonth: REF },
     );
@@ -129,11 +130,11 @@ describe("expectedInflow", () => {
   });
 
   it("includes registered and overdue from previous months (due <= last day of month)", () => {
-    // Filter: originalDueDate <= "2026-03-31" AND status registered|overdue
+    // Filter: dueDate <= "2026-03-31" AND status registered|overdue
     const result = runCalculateStage(
       makeCollect([
-        rec({ status: "overdue",    originalDueDate: "2026-02-15", amount: 300 }),
-        rec({ status: "registered", originalDueDate: "2026-02-10", amount: 400 }), // registered + past due → included
+        rec({ status: "overdue",    dueDate: "2026-02-15", amount: 300 }),
+        rec({ status: "registered", dueDate: "2026-02-10", amount: 400 }), // registered + past due → included
       ]),
       { timezone: TZ, referenceMonth: REF },
     );
@@ -143,17 +144,17 @@ describe("expectedInflow", () => {
   it("excludes registered records with due date after end of reference month", () => {
     const result = runCalculateStage(
       makeCollect([
-        rec({ status: "registered", originalDueDate: "2026-04-15", amount: 500 }), // April → excluded
-        rec({ status: "registered", originalDueDate: "2026-03-31", amount: 200 }), // last day of March → included
+        rec({ status: "registered", dueDate: "2026-04-15", amount: 500 }), // April → excluded
+        rec({ status: "registered", dueDate: "2026-03-31", amount: 200 }), // last day of March → included
       ]),
       { timezone: TZ, referenceMonth: REF },
     );
     expect(result.revenue.current.expectedInflow).toBe(200);
   });
 
-  it("does not include records with null originalDueDate", () => {
+  it("does not include records with null dueDate", () => {
     const result = runCalculateStage(
-      makeCollect([rec({ status: "registered", originalDueDate: null, amount: 999 })]),
+      makeCollect([rec({ status: "registered", dueDate: null, amount: 999 })]),
       { timezone: TZ, referenceMonth: REF },
     );
     expect(result.revenue.current.expectedInflow).toBe(0);
@@ -188,14 +189,14 @@ describe("unknown and canceled exclusions", () => {
           status: "unknown",
           invoiceCreatedAt: "2026-03-01T12:00:00.000Z",
           paidDate: "2026-03-01",
-          originalDueDate: "2026-03-01",
+          dueDate: "2026-03-01",
           amount: 9999,
         }),
         rec({
           status: "canceled",
           invoiceCreatedAt: "2026-03-01T12:00:00.000Z",
           paidDate: "2026-03-01",
-          originalDueDate: "2026-03-01",
+          dueDate: "2026-03-01",
           amount: 9999,
         }),
       ]),

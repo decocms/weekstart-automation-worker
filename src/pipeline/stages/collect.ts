@@ -12,6 +12,7 @@ const REQUIRED_FIELDS = [
   "Cliente",
   "Reference month",
   "Vencimento original",
+  "Vencimento",
   "Status Account",
   "Valor",
   "paid_date",
@@ -127,6 +128,7 @@ export function normalizeAirtableRecord(record: AirtableRecord): CollectRecord {
     clientName: asString(fields["Name (from Cliente)"]) ?? asString(fields["Cliente Nome"]) ?? asString(fields.Cliente),
     referenceMonth: asString(fields["Reference month"]),
     originalDueDate: asString(fields["Vencimento original"]),
+    dueDate: asString(fields["Vencimento"]),
     paidDate: asString(fields.paid_date),
     invoiceNumber: asString(fields["Num NF"]),
     invoiceCreatedAt: asString(fields["NF created"]),
@@ -198,7 +200,7 @@ export async function runCollectStage(config: CollectStageConfig): Promise<Colle
     if (record.status === "unknown") unknownStatusCount += 1;
 
     const isOpen = record.status !== "paid" && record.status !== "canceled";
-    if (isOpen && !record.originalDueDate) missingDueDateForOpenCount += 1;
+    if (isOpen && !record.dueDate) missingDueDateForOpenCount += 1;
 
     if (!record.invoiceCreatedAt) missingInvoiceCreatedAtCount += 1;
     if (record.amount === null) missingAmountCount += 1;

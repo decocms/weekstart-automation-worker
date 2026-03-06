@@ -2,7 +2,9 @@ import { runCollectStage } from "./pipeline/stages/collect";
 import { runCalculateStage } from "./pipeline/stages/calculate";
 import { runConsolidateStage } from "./pipeline/stages/consolidate";
 import { runTestStage } from "./pipeline/stages/test";
+import { runPublishStage } from "./pipeline/stages/publish";
 import type { Scorecard } from "./pipeline/stages/consolidate";
+import type { PublishStageResult } from "./pipeline/stages/publish";
 
 export interface Env {
   RUN_KEY: string;
@@ -15,6 +17,15 @@ export interface Env {
   AIRTABLE_BASE_ID?: string;
   AIRTABLE_TABLE_ID?: string;
   AIRTABLE_VIEW_ID?: string;
+
+  // Stats Lake / ClickHouse (Costs block)
+  STATS_LAKE_URL: string;
+  STATS_LAKE_USER: string;
+  STATS_LAKE_PASSWORD: string;
+
+  // Linear (Publish stage)
+  LINEAR_API_KEY?: string;
+  LINEAR_PROJECT_ID?: string;
 }
 
 /**
@@ -181,7 +192,7 @@ function prevYearMonth(ym: string): string {
     : `${year}-${String(month - 1).padStart(2, "0")}`;
 }
 
-function field(name: string, description: string, value: string, comparison?: string): DiscordEmbed["fields"][number] {
+function field(name: string, description: string, value: string, comparison?: string): NonNullable<DiscordEmbed["fields"]>[number] {
   return {
     name: `${name} — ${description}`,
     value: comparison ? `**${value}**\n${comparison}` : `**${value}**`,
@@ -189,8 +200,8 @@ function field(name: string, description: string, value: string, comparison?: st
   };
 }
 
-function buildScorecardPreviewEmbed(scorecard: Scorecard): DiscordEmbed {
-  const { revenue } = scorecard;
+function buildScorecardPreviewEmbed(scorecard: Scorecard, publish?: PublishStageResult): DiscordEmbed {
+  const { revenue, costs } = scorecard;
   const { current, previous, referenceMonth, totalOpen } = revenue;
 
   const currLabel = yearMonthLabel(referenceMonth);
@@ -199,40 +210,61 @@ function buildScorecardPreviewEmbed(scorecard: Scorecard): DiscordEmbed {
   const cmp = (prev: number, curr: number) =>
     `vs. ${prevLabel}: ${fmtBRL(prev)} (${fmtDelta(prev, curr)})`;
 
+  const costsSamePeriodNote =
+    costs.samePeriodDiffPct !== null
+      ? `vs. mesmo periodo ${prevLabel}: ${fmtBRL(costs.previous.totalCost)} (${costs.samePeriodDiffPct >= 0 ? "+" : ""}${costs.samePeriodDiffPct.toFixed(1)}%)`
+      : `sem dados do mesmo periodo em ${prevLabel}`;
+
+  const fields: DiscordEmbed["fields"] = [
+    field(
+      "Invoiced",
+      `Invoices emitted in ${currLabel}`,
+      fmtBRL(current.billedAmount),
+      cmp(previous.billedAmount, current.billedAmount),
+    ),
+    field(
+      "Cash In",
+      `Receivables confirmed in ${currLabel}`,
+      fmtBRL(current.receivedAmount),
+      cmp(previous.receivedAmount, current.receivedAmount),
+    ),
+    field(
+      "Expected Cash In",
+      `All unpaid receivables due on or before end of ${currLabel}`,
+      fmtBRL(current.expectedInflow),
+    ),
+    field(
+      "A/R",
+      "Total outstanding receivables across all months",
+      fmtBRL(totalOpen),
+    ),
+    field(
+      "Infra GCP MTD",
+      `Custo acumulado (primeiros ${costs.daysElapsed} dias de ${currLabel})`,
+      fmtBRL(costs.current.totalCost),
+      costsSamePeriodNote,
+    ),
+    field(
+      "Infra GCP Projecao EOM",
+      `Estimativa para fim de ${currLabel}`,
+      fmtBRL(costs.projectedEOM),
+      `mes anterior total: ${fmtBRL(costs.previousMonthTotal)}`,
+    ),
+    { name: "runId", value: `\`${scorecard.runId}\``, inline: false },
+  ];
+
+  if (publish) {
+    fields.push({ name: "Linear document", value: publish.documentUrl, inline: false });
+  }
+
   return {
     title: `Finance Overview · ${currLabel}`,
-    description: "Weekly scorecard preview — awaiting approval before publishing.",
-    color: 0x3b82f6,
-    fields: [
-      field(
-        "Invoiced",
-        `Invoices emitted in ${currLabel}`,
-        fmtBRL(current.billedAmount),
-        cmp(previous.billedAmount, current.billedAmount),
-      ),
-      field(
-        "Cash In",
-        `Receivables confirmed in ${currLabel}`,
-        fmtBRL(current.receivedAmount),
-        cmp(previous.receivedAmount, current.receivedAmount),
-      ),
-      field(
-        "Expected Cash In",
-        `All unpaid receivables due on or before end of ${currLabel}`,
-        fmtBRL(current.expectedInflow),
-      ),
-      field(
-        "A/R",
-        "Total outstanding receivables across all months",
-        fmtBRL(totalOpen),
-      ),
-      {
-        name: "runId",
-        value: `\`${scorecard.runId}\``,
-        inline: false,
-      },
-    ],
-    footer: { text: "weekstart-automation-worker · preview" },
+    description: publish
+      ? "Weekly scorecard published to Linear."
+      : "Weekly scorecard preview — LINEAR_API_KEY not set, skipped publish.",
+    color: publish ? 0x4cb782 : 0x3b82f6,
+    fields,
+    footer: { text: "weekstart-automation-worker" },
     timestamp: scorecard.generatedAtIso,
   };
 }
@@ -259,8 +291,11 @@ async function runWeekstartJob(env: Env, meta: RunMeta, runId: string): Promise<
     JSON.stringify({ totalRecords: collect.records.length, quality: collect.quality })
   );
 
-  const calculate = runCalculateStage(collect, {
-    timezone: env.TIMEZONE ?? "America/Sao_Paulo",
+  const calculate = await runCalculateStage(collect, {
+    timezone:          env.TIMEZONE ?? "America/Sao_Paulo",
+    statsLakeUrl:      env.STATS_LAKE_URL,
+    statsLakeUser:     env.STATS_LAKE_USER,
+    statsLakePassword: env.STATS_LAKE_PASSWORD,
   });
 
   console.log(
@@ -274,7 +309,19 @@ async function runWeekstartJob(env: Env, meta: RunMeta, runId: string): Promise<
 
   console.log("[weekstart] scorecard ready", JSON.stringify({ referenceMonth: scorecard.referenceMonth }));
 
-  await sendDiscord(env, { embeds: [buildScorecardPreviewEmbed(scorecard)] });
+  let publishResult: PublishStageResult | undefined;
+  if (env.LINEAR_API_KEY && env.LINEAR_PROJECT_ID) {
+    publishResult = await runPublishStage(scorecard, {
+      linearApiKey: env.LINEAR_API_KEY,
+      linearProjectId: env.LINEAR_PROJECT_ID,
+      timezone: env.TIMEZONE ?? "America/Sao_Paulo",
+    });
+    console.log("[weekstart] published", JSON.stringify({ documentId: publishResult.documentId, documentUrl: publishResult.documentUrl }));
+  } else {
+    console.log("[weekstart] publish skipped: LINEAR_API_KEY or LINEAR_PROJECT_ID not set");
+  }
+
+  await sendDiscord(env, { embeds: [buildScorecardPreviewEmbed(scorecard, publishResult)] });
 }
 
 /**

@@ -6,12 +6,6 @@
  * block in src/pipeline/blocks/.
  */
 
-/**
- * Normalized status values for an accounts receivable record.
- *
- * "unknown" catches any raw value that does not map to a known status.
- * Records with this status are excluded from all financial metrics.
- */
 export type ReceivableStatus = "paid" | "registered" | "overdue" | "canceled" | "unknown";
 
 /**
@@ -23,12 +17,13 @@ export type CollectRecord = {
   accountId: number | null;
   clientName: string | null;
   referenceMonth: string | null;
-  originalDueDate: string | null;   // "YYYY-MM-DD" or null
-  paidDate: string | null;          // "YYYY-MM-DD" or null
+  originalDueDate: string | null;
+  dueDate: string | null;
+  paidDate: string | null;
   invoiceNumber: string | null;
-  invoiceCreatedAt: string | null;  // ISO datetime or null
+  invoiceCreatedAt: string | null;
   amount: number | null;
-  statusRaw: string | null;         // original value before normalization
+  statusRaw: string | null;
   status: ReceivableStatus;
 };
 

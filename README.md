@@ -4,7 +4,7 @@ Cloudflare Worker that runs on a weekly schedule and publishes a business scorec
 
 ## What this is
 
-A Cloudflare Worker triggered by a Cron every week. It collects raw data from source systems, computes business metrics, assembles a canonical Scorecard, validates it, and publishes it to Linear. Each failed run sends a structured Discord alert.
+A Cloudflare Worker triggered by a Cron every week. It collects raw data from source systems, computes business metrics, assembles a canonical Scorecard, validates it, and publishes it to Linear as a Document inside the configured project. Each failed run sends a structured Discord alert.
 
 ## Pipeline
 
@@ -20,9 +20,9 @@ Each stage has a single responsibility and a stable output contract.
 | **calculate** | Run all business blocks over collected data | `CalculateStageOutput` |
 | **consolidate** | Merge block outputs with run metadata | `Scorecard` |
 | **test** | Validate the Scorecard contract before publishing | throws on failure |
-| **publish** | Render and publish to Linear | _(planned)_ |
+| **publish** | Create a Linear Document in the configured project | `PublishStageResult` |
 
-On every successful run a Discord preview embed is sent for human validation before the Linear publish step is implemented.
+On every successful run a Discord embed is sent with the scorecard metrics and a link to the Linear document.
 
 ## Architecture — Block-Based Design
 
@@ -50,7 +50,7 @@ src/
         ├── calculate.ts            # Stage 2 — Thin orchestrator, calls each block
         ├── consolidate.ts          # Stage 3 — Assembles Scorecard (Scorecard type lives here)
         ├── test.ts                 # Stage 4 — Contract validation (throws on failure)
-        └── publish.ts              # Stage 5 — Linear publishing (planned)
+        └── publish.ts              # Stage 5 — Creates Linear Document
 
 test/
 ├── collect.spec.ts
@@ -74,15 +74,22 @@ All logic is pure (no I/O, no side effects). Exclusion rules applied before ever
 |---|---|
 | `billedAmount` | Sum of Valor for records whose NF was emitted (`invoiceCreatedAt`) this month |
 | `receivedAmount` | Sum of Valor for records whose payment was confirmed (`paidDate`) this month |
-| `receivedPct` | `receivedAmount / billedAmount × 100`. `null` when `billedAmount` is zero |
-| `expectedInflow` | Group A: due this month and not yet paid + Group B: overdue from any prior month |
+| `expectedInflow` | All `registered`/`overdue` records with `dueDate` (effective due date) on or before the last day of this month |
 | `totalOpen` | Snapshot of all `registered`/`overdue` records across all months |
+
+**Note on `expectedInflow`:** uses the `Vencimento` column (effective due date after any renegotiation), not `Vencimento original`. `originalDueDate` is kept on `CollectRecord` for audit purposes only.
 
 ### Block 4 — Infrastructure Costs _(planned)_
 ### Block 5 — Margin and Result _(planned)_
 ### Block 6 — AI Block _(planned)_
 ### Block 7 — Automatic Executive Summary _(planned)_
-### Block 8 — Scorecard Publishing _(planned)_
+
+## Publish Stage (`src/pipeline/stages/publish.ts`)
+
+Creates a Linear Document in the configured project on every run. The document uses the "Week end" template structure with the finance scorecard injected inside the "Announcements & distinctions" section.
+
+- Title format: `Week-end | DD/MM/YYYY` (run date in configured timezone)
+- Skipped gracefully if `LINEAR_API_KEY` or `LINEAR_PROJECT_ID` are not set
 
 ## Requirements
 
@@ -142,12 +149,14 @@ Required:
 - `AIRTABLE_TOKEN` — Airtable Personal Access Token used by the collect stage.
 
 Optional:
-- `DISCORD_WEBHOOK_URL` — receives failure alerts and scorecard previews. Worker runs normally without it.
+- `DISCORD_WEBHOOK_URL` — receives failure alerts and scorecard embeds. Worker runs normally without it.
 - `TIMEZONE` — IANA timezone for date calculations. Defaults to `America/Sao_Paulo`.
 - `WORKER_PUBLIC_URL` — base URL used to build links in Discord alerts.
 - `AIRTABLE_BASE_ID` — defaults to `applTenaA2A7ElyNl`.
 - `AIRTABLE_TABLE_ID` — defaults to `tblnpSGZ1jqQhJNnm` (Accounts Receivable).
 - `AIRTABLE_VIEW_ID` — defaults to `viwC8eUcFU9tp01dw` (Pelinsari-CeremonyWorker).
+- `LINEAR_API_KEY` — Linear Personal API Key. Publish stage is skipped if not set.
+- `LINEAR_PROJECT_ID` — UUID of the Linear project to publish documents into.
 
 ## Deploy
 

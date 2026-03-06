@@ -57,6 +57,29 @@ export function lastDayOfMonth(ym: string): string {
 }
 
 /**
+ * Extracts the day-of-month from a date string, handling two formats:
+ *
+ * - Date-only ("2026-03-17"): read day directly — no timezone conversion.
+ * - ISO datetime ("2026-03-17T14:00:00.000Z"): converted to the given timezone
+ *   before extracting the day, matching the behaviour of getYearMonth.
+ *
+ * Returns null for empty or unparseable strings.
+ */
+export function getDayOfMonth(dateStr: string | null, timezone: string): number | null {
+  if (!dateStr?.trim()) return null;
+  const s = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return Number(s.slice(8, 10));
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    day: "2-digit",
+  }).formatToParts(d);
+  const day = parts.find(p => p.type === "day")?.value;
+  return day ? Number(day) : null;
+}
+
+/**
  * Extracts "YYYY-MM" from a date string, handling two formats:
  *
  * - Date-only ("2026-03-17"): the month is read directly without any

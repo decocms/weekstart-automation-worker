@@ -21,7 +21,7 @@ export type Scorecard = {
   referenceMonth: string; // "YYYY-MM"
   generatedAtIso: string;
   revenue: CalculateStageOutput["revenue"];
-  // costs: CalculateStageOutput["costs"];   // Block 4
+  costs: CalculateStageOutput["costs"]; // Block 4
   // margin: CalculateStageOutput["margin"]; // Block 5
 };
 
@@ -34,5 +34,6 @@ export function runConsolidateStage(calculate: CalculateStageOutput, runId: stri
     referenceMonth: calculate.referenceMonth,
     generatedAtIso: new Date().toISOString(),
     revenue: calculate.revenue,
+    costs: calculate.costs,
   };
 }
