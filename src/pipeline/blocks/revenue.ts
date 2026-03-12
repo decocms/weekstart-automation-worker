@@ -199,17 +199,37 @@ function computeMonthMetrics(records: PreparedRecord[], month: string): RevenueM
   let billedAmount = 0;
   let receivedAmount = 0;
 
+  // Debug counters
+  let totalWithRefMonth = 0;
+  let excludedNotIssued = 0;
+  let includedInBilled = 0;
+
   for (const record of records) {
     if (!isRevenueMetricRecord(record)) continue;
 
-    // Revenue: NFE.io status must be "issued" + group by referenceMonth
-    if (record.nfeStatus === "issued" && record.referenceMonth === month) {
-      billedAmount += record.amount;
+    // Count records with this referenceMonth
+    if (record.referenceMonth === month) {
+      totalWithRefMonth++;
+
+      // Revenue: NFE.io status must be "issued" + group by referenceMonth
+      if (record.nfeStatus === "issued") {
+        billedAmount += record.amount;
+        includedInBilled++;
+      } else {
+        excludedNotIssued++;
+      }
     }
 
     // Cash In: payments received in this month
     if (record.paidMonth === month) receivedAmount += record.amount;
   }
+
+  console.log(`[revenue] Month ${month}:`, {
+    totalWithRefMonth,
+    includedInBilled,
+    excludedNotIssued,
+    billedAmount: billedAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
+  });
 
   return { billedAmount, receivedAmount };
 }
@@ -497,9 +517,10 @@ export function computeHistoricalRevenue(
 
   for (const record of prepared) {
     if (!isRevenueMetricRecord(record)) continue;
-    const monthKey = record.referenceMonth ?? record.invoiceMonth;
-    if (!monthKey) continue;
-    billedByReferenceMonth.set(monthKey, (billedByReferenceMonth.get(monthKey) ?? 0) + record.amount);
+    // Revenue: ONLY referenceMonth (no fallback) + nfeStatus must be "issued"
+    if (!record.referenceMonth) continue;
+    if (record.nfeStatus !== "issued") continue;
+    billedByReferenceMonth.set(record.referenceMonth, (billedByReferenceMonth.get(record.referenceMonth) ?? 0) + record.amount);
   }
 
   const monthBeforeFirst = previousMonth(months[0]!);
