@@ -12,7 +12,7 @@
  */
 
 import type { Scorecard } from "./consolidate";
-import { previousMonth } from "../../core/date";
+import { renderScorecardSvg } from "../../scorecard";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -38,13 +38,6 @@ const MONTHS_PT = [
 
 // ---- Markdown helpers -------------------------------------------------------
 
-function fmtBRL(amount: number): string {
-  const fixed = Math.abs(amount).toFixed(2);
-  const [int, dec] = fixed.split(".");
-  const intFmt = int!.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `R$ ${intFmt},${dec}`;
-}
-
 function yearMonthLabel(ym: string): string {
   const month = Number(ym.slice(5, 7));
   return `${MONTHS_PT[month - 1]}/${ym.slice(0, 4)}`;
@@ -64,59 +57,21 @@ function formatRunDate(iso: string, timezone: string): string {
 
 // ---- Document content builder -----------------------------------------------
 
+type ChartAssets = {
+  scorecardCard?: string;
+};
+
 /**
- * Builds the full document markdown by injecting the scorecard table
- * into the "Announcements & distinctions" section of the Week end template.
+ * Builds the full document markdown by injecting the scorecard
+ * into the "We are profitable" section of the Week end template.
  */
-function buildDocumentContent(
-  scorecard: Scorecard,
-  revenueChartAssetUrl: string,
-): string {
-  const { revenue, costs } = scorecard;
-  const { current, previous, referenceMonth, totalOpen } = revenue;
+function buildDocumentContent(scorecard: Scorecard, chartAssets: ChartAssets): string {
+  const currLabel = yearMonthLabel(scorecard.referenceMonth);
 
-  const currLabel = yearMonthLabel(referenceMonth);
-  const prevLabel = yearMonthLabel(previousMonth(referenceMonth));
-
-  const fmtDelta = (prev: number, curr: number): string => {
-    if (prev === 0) return curr > 0 ? "new" : "—";
-    const pct = ((curr - prev) / prev) * 100;
-    return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
-  };
-
-  const cmp = (prev: number, curr: number) =>
-    `vs. ${prevLabel}: ${fmtBRL(prev)} (${fmtDelta(prev, curr)})`;
-
-  const costsSamePeriodNote =
-    costs.samePeriodDiffPct !== null
-      ? ` · vs. mesmo periodo ${prevLabel}: ${fmtBRL(costs.previous.totalCost)} (${costs.samePeriodDiffPct >= 0 ? "+" : ""}${costs.samePeriodDiffPct.toFixed(1)}%)`
-      : ` · sem dados do mesmo periodo em ${prevLabel}`;
-
-  const scorecardSection = [
-    `## Finance - ${currLabel}`,
-    "",
-    `> **Invoiced** — Invoices issued this month`,
-    `> **${fmtBRL(current.billedAmount)}** · ${cmp(previous.billedAmount, current.billedAmount)}`,
-    "",
-    `> **Cash In** — Payments confirmed this month`,
-    `> **${fmtBRL(current.receivedAmount)}** · ${cmp(previous.receivedAmount, current.receivedAmount)}`,
-    "",
-    `![Cash In acumulado](${revenueChartAssetUrl})`,
-    "",
-    `> **Expected Inflow** — Unpaid receivables due by end of ${currLabel}`,
-    `> **${fmtBRL(current.expectedInflow)}**`,
-    "",
-    `> **A/R Total** — All open receivables across all months`,
-    `> **${fmtBRL(totalOpen)}**`,
-    "",
-    `## Infra GCP - ${currLabel}`,
-    "",
-    `> **MTD** — Custo acumulado (primeiros ${costs.daysElapsed} dias)`,
-    `> **${fmtBRL(costs.current.totalCost)}**${costsSamePeriodNote}`,
-    "",
-    `> **Projecao EOM** — Estimativa para fim de ${currLabel}`,
-    `> **${fmtBRL(costs.projectedEOM)}** · mes anterior total: ${fmtBRL(costs.previousMonthTotal)}`,
-  ].join("\n");
+  // Scorecard card image only (visual summary)
+  const scorecardSection = chartAssets.scorecardCard
+    ? `### Finance - ${currLabel}\n\n![Finance Scorecard](${chartAssets.scorecardCard})`
+    : `### Finance - ${currLabel}`;
 
   return [
     "# Announcements & distinctions",
@@ -131,12 +86,89 @@ function buildDocumentContent(
     "",
     "> *30 minutes* — Time to share what went right (our highlights/results), what went wrong (our learnings) and let's showcase our improvements towards our commitments (**DEMO TIME!**)",
     "",
+    "## We are profitable and have lean ops",
+    "",
     scorecardSection,
+    "",
+    "## Validated PMF for ecommerce agents",
+    "",
+    "## Decocms is the obvious choice for VTEX enterprise storefronts",
+    "",
+    "## Studio works as home for storefront, cogna and studio (builder) projects",
     "",
     "# Recognition and thanks",
     "",
     "> *10 minutes* — Recognize or thank your peers for something you admired.",
   ].join("\n");
+}
+
+// ---- Scorecard card SVG -----------------------------------------------------
+
+/**
+ * Generates a scorecard card SVG and uploads it to Linear.
+ *
+ * @param scorecard - The scorecard data
+ * @param linearApiKey - Linear API key for upload
+ * @returns The Linear asset URL for the card image
+ */
+async function generateAndUploadCardSvg(
+  scorecard: Scorecard,
+  linearApiKey: string,
+): Promise<string> {
+  // Generate SVG
+  const svg = renderScorecardSvg(scorecard, { width: 840 });
+  const svgBuffer = new TextEncoder().encode(svg);
+  const size = svgBuffer.byteLength;
+
+  // Request upload URL from Linear
+  const mutationResponse = await fetch(LINEAR_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: linearApiKey,
+    },
+    body: JSON.stringify({
+      query: FILE_UPLOAD_MUTATION,
+      variables: { contentType: "image/svg+xml", filename: "scorecard-card.svg", size },
+    }),
+  });
+
+  if (!mutationResponse.ok) {
+    const body = await mutationResponse.text().catch(() => "");
+    throw new Error(`fileUpload mutation failed: HTTP ${mutationResponse.status} ${body.slice(0, 240).trim()}`);
+  }
+
+  const uploadPayload = (await mutationResponse.json()) as FileUploadPayload;
+  if (uploadPayload.errors?.length) {
+    const msg = uploadPayload.errors.map(e => e.message).join("; ");
+    throw new Error(`fileUpload mutation failed: ${msg}`);
+  }
+
+  const uploadFile = uploadPayload.data?.fileUpload?.uploadFile;
+  if (!uploadFile?.uploadUrl || !uploadFile.assetUrl) {
+    throw new Error("fileUpload returned no uploadUrl or assetUrl");
+  }
+
+  // PUT the SVG to the signed URL
+  const extraHeaders = Object.fromEntries(
+    uploadFile.headers.map(h => [h.key, h.value]),
+  );
+  const putResponse = await fetch(uploadFile.uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "image/svg+xml",
+      "cache-control": "max-age=31536000",
+      ...extraHeaders,
+    },
+    body: svgBuffer,
+  });
+
+  if (!putResponse.ok) {
+    const body = await putResponse.text().catch(() => "");
+    throw new Error(`Card SVG upload PUT failed: HTTP ${putResponse.status} ${body.slice(0, 240).trim()}`);
+  }
+
+  return uploadFile.assetUrl;
 }
 
 // ---- Chart upload -----------------------------------------------------------
@@ -272,17 +304,19 @@ export async function runPublishStage(
   scorecard: Scorecard,
   config: PublishStageConfig,
 ): Promise<PublishStageResult> {
-  // Upload revenue chart to Linear's storage (server-to-server) so it renders
-  // without CSP restrictions. GCP costs chart temporarily disabled.
-  const revenueChartAssetUrl = await uploadChartToLinear(
-    scorecard.revenue.chartUrl,
+  // Generate and upload scorecard card SVG
+  const scorecardCardAssetUrl = await generateAndUploadCardSvg(
+    scorecard,
     config.linearApiKey,
-    "revenue-cashin.png",
   );
+
+  const chartAssets: ChartAssets = {
+    scorecardCard: scorecardCardAssetUrl,
+  };
 
   const input = {
     title: `Week-end | ${formatRunDate(scorecard.generatedAtIso, config.timezone)}`,
-    content: buildDocumentContent(scorecard, revenueChartAssetUrl),
+    content: buildDocumentContent(scorecard, chartAssets),
     projectId: config.linearProjectId,
     lastAppliedTemplateId: WEEK_END_TEMPLATE_ID,
     icon: "Dino",
@@ -323,3 +357,5 @@ export async function runPublishStage(
     documentUrl: result.document.url,
   };
 }
+
+

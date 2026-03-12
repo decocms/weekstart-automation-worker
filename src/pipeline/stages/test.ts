@@ -13,7 +13,7 @@ export function runTestStage(scorecard: Scorecard): void {
     failures.push(`referenceMonth has invalid format: "${scorecard.referenceMonth}"`);
   }
 
-  const { current, previous, totalOpen } = scorecard.revenue;
+  const { current, previous, expectedInflow, totalOpen } = scorecard.revenue;
 
   for (const [label, m] of [
     ["revenue.current", current],
@@ -21,9 +21,9 @@ export function runTestStage(scorecard: Scorecard): void {
   ] as const) {
     assertFiniteNonNegative(m.billedAmount, `${label}.billedAmount`, failures);
     assertFiniteNonNegative(m.receivedAmount, `${label}.receivedAmount`, failures);
-    assertFiniteNonNegative(m.expectedInflow, `${label}.expectedInflow`, failures);
   }
 
+  assertFiniteNonNegative(expectedInflow, "revenue.expectedInflow", failures);
   assertFiniteNonNegative(totalOpen, "revenue.totalOpen", failures);
 
   if (!scorecard.revenue.chartUrl.startsWith("https://")) {

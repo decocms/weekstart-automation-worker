@@ -22,6 +22,7 @@ export type CollectRecord = {
   paidDate: string | null;
   invoiceNumber: string | null;
   invoiceCreatedAt: string | null;
+  nfeStatus: string | null;
   amount: number | null;
   statusRaw: string | null;
   status: ReceivableStatus;

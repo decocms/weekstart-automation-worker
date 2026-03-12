@@ -299,6 +299,8 @@ function computeProjectedEOM(
 
 // ---- Chart ------------------------------------------------------------------
 
+export type ChartTheme = "light" | "dark";
+
 /**
  * Builds the Chart.js config object for the two-month cost trend.
  *
@@ -313,6 +315,7 @@ export function buildChartConfig(
   daily: RawDailyRow[],
   block: Omit<CostsBlock, "chartUrl">,
   prevMonth: string,
+  theme: ChartTheme = "light",
 ): object {
   const { referenceMonth, daysElapsed, daysInMonth, projectedEOM, current } = block;
 
@@ -348,6 +351,10 @@ export function buildChartConfig(
     return Math.round(dailyRate);
   });
 
+  const isDark = theme === "dark";
+  const gridColor = isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.1)";
+  const labelColor = isDark ? "#888888" : "#666666";
+
   return {
     type: "line",
     data: {
@@ -356,7 +363,7 @@ export function buildChartConfig(
         {
           label: "Mês anterior",
           data: prevData,
-          borderColor: "#aaaaaa",
+          borderColor: isDark ? "#666666" : "#aaaaaa",
           borderWidth: 1,
           pointRadius: 0,
           fill: false,
@@ -384,8 +391,21 @@ export function buildChartConfig(
       ],
     },
     options: {
-      legend: { display: true, position: "bottom", labels: { boxWidth: 12, fontSize: 10 } },
-      scales: { yAxes: [{ ticks: { beginAtZero: true } }] },
+      legend: {
+        display: true,
+        position: "bottom",
+        labels: { boxWidth: 12, fontSize: 10, fontColor: labelColor },
+      },
+      scales: {
+        xAxes: [{
+          gridLines: { color: gridColor },
+          ticks: { fontColor: labelColor },
+        }],
+        yAxes: [{
+          gridLines: { color: gridColor },
+          ticks: { beginAtZero: true, fontColor: labelColor },
+        }],
+      },
     },
   };
 }
@@ -399,9 +419,10 @@ export function buildChartConfig(
  *
  * Pure — no I/O.
  */
-export function buildChartUrl(chartConfig: object): string {
+export function buildChartUrl(chartConfig: object, darkTheme = false): string {
   const encoded = encodeURIComponent(JSON.stringify(chartConfig));
-  return `https://quickchart.io/chart?c=${encoded}&w=600&h=300&bkg=white`;
+  const bkg = darkTheme ? "%231a1a2e" : "white";
+  return `https://quickchart.io/chart?c=${encoded}&w=600&h=300&bkg=${bkg}`;
 }
 
 // ---- Block ------------------------------------------------------------------

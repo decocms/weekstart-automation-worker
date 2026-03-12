@@ -22,6 +22,7 @@ describe("collect stage", () => {
     expect(normalized.clientName).toBe("Prohall Cosmetic");
     expect(normalized.statusRaw).toBe("created");
     expect(normalized.status).toBe("registered");
+    expect(normalized.nfeStatus).toBeNull();
     expect(normalized.amount).toBe(1923.3325);
   });
 
@@ -40,6 +41,7 @@ describe("collect stage", () => {
                   "Status Account": "created",
                   "Vencimento original": "",
                   "NF created": "",
+                  "NFE.io status": "Draft",
                   Valor: 100,
                 },
               },
@@ -61,6 +63,7 @@ describe("collect stage", () => {
                   "Status Account": "paid",
                   "Vencimento original": "2025-07-20",
                   "NF created": "2025-07-02T11:47:53.000Z",
+                  "NFE.io status": "Issued",
                   Valor: 200,
                 },
               },
@@ -82,12 +85,15 @@ describe("collect stage", () => {
     const firstUrl = new URL(String(fetchSpy.mock.calls[0]?.[0]));
     expect(firstUrl.searchParams.get("view")).toBe("viwMain");
     expect(firstUrl.searchParams.get("pageSize")).toBe("100");
+    expect(firstUrl.searchParams.getAll("fields[]")).toContain("NFE.io status");
 
     expect(result.source).toBe("airtable");
     expect(result.timezone).toBe("America/Sao_Paulo");
     expect(result.records).toHaveLength(2);
     expect(result.records[0]?.status).toBe("registered");
     expect(result.records[1]?.status).toBe("paid");
+    expect(result.records[0]?.nfeStatus).toBe("Draft");
+    expect(result.records[1]?.nfeStatus).toBe("Issued");
     expect(result.quality).toEqual({
       unknownStatusCount: 0,
       missingDueDateForOpenCount: 1,

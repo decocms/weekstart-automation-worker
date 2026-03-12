@@ -18,6 +18,7 @@ const REQUIRED_FIELDS = [
   "paid_date",
   "Num NF",
   "NF created",
+  "NFE.io status",
 ] as const;
 
 type AirtableFields = Record<string, unknown>;
@@ -132,9 +133,10 @@ export function normalizeAirtableRecord(record: AirtableRecord): CollectRecord {
     paidDate: asString(fields.paid_date),
     invoiceNumber: asString(fields["Num NF"]),
     invoiceCreatedAt: asString(fields["NF created"]),
+    nfeStatus: asString(fields["NFE.io status"]),
     amount: asNumber(fields.Valor),
     statusRaw,
-    status: normalizeStatus(statusRaw),
+    status: asString(fields["Status Account"]),
   };
 }
 

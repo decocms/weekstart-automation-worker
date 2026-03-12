@@ -5,7 +5,12 @@
  * stage. Both the test stage and the worker entry point import it from here.
  */
 
-import type { CalculateStageOutput } from "./calculate";
+import type { CalculateStageOutput, CostsDailyRow } from "./calculate";
+import type { RevenueHistoricalMonth } from "../blocks/revenue";
+
+// Re-export types for convenience
+export type { CostsDailyRow } from "./calculate";
+export type { RevenueHistoricalMonth } from "../blocks/revenue";
 
 // ---- Types ------------------------------------------------------------------
 
@@ -23,17 +28,26 @@ export type Scorecard = {
   revenue: CalculateStageOutput["revenue"];
   costs: CalculateStageOutput["costs"]; // Block 4
   // margin: CalculateStageOutput["margin"]; // Block 5
+
+  // Raw data for card chart generation
+  revenueHistory: RevenueHistoricalMonth[];
+  costsDaily: CostsDailyRow[];
 };
 
 // ---- Stage ------------------------------------------------------------------
 
 /** Merges calculate output with run metadata into the final Scorecard. */
-export function runConsolidateStage(calculate: CalculateStageOutput, runId: string): Scorecard {
+export function runConsolidateStage(
+  calculate: CalculateStageOutput,
+  runId: string,
+): Scorecard {
   return {
     runId,
     referenceMonth: calculate.referenceMonth,
     generatedAtIso: new Date().toISOString(),
     revenue: calculate.revenue,
     costs: calculate.costs,
+    revenueHistory: calculate.revenueHistory,
+    costsDaily: calculate.costsDaily,
   };
 }

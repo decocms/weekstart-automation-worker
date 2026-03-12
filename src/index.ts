@@ -5,6 +5,7 @@ import { runTestStage } from "./pipeline/stages/test";
 import { runPublishStage } from "./pipeline/stages/publish";
 import type { Scorecard } from "./pipeline/stages/consolidate";
 import type { PublishStageResult } from "./pipeline/stages/publish";
+import { revenueToNodes, costsToNodes, renderToDiscordFields } from "./scorecard";
 
 export interface Env {
   RUN_KEY: string;
@@ -165,91 +166,25 @@ const MONTHS_PT = [
   "jul", "ago", "set", "out", "nov", "dez",
 ];
 
-function fmtBRL(amount: number): string {
-  const fixed = Math.abs(amount).toFixed(2);
-  const [int, dec] = fixed.split(".");
-  const intFmt = int!.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `R$ ${intFmt},${dec}`;
-}
-
-function fmtDelta(prev: number, curr: number): string {
-  if (prev === 0) return curr > 0 ? "novo" : "—";
-  const pct = ((curr - prev) / prev) * 100;
-  const sign = pct >= 0 ? "+" : "";
-  return `${sign}${pct.toFixed(1)}%`;
-}
-
 function yearMonthLabel(ym: string): string {
   const month = Number(ym.slice(5, 7));
   return `${MONTHS_PT[month - 1]}/${ym.slice(0, 4)}`;
 }
 
-function prevYearMonth(ym: string): string {
-  const year = Number(ym.slice(0, 4));
-  const month = Number(ym.slice(5, 7));
-  return month === 1
-    ? `${year - 1}-12`
-    : `${year}-${String(month - 1).padStart(2, "0")}`;
-}
-
-function field(name: string, description: string, value: string, comparison?: string): NonNullable<DiscordEmbed["fields"]>[number] {
-  return {
-    name: `${name} — ${description}`,
-    value: comparison ? `**${value}**\n${comparison}` : `**${value}**`,
-    inline: false,
-  };
-}
-
 function buildScorecardPreviewEmbed(scorecard: Scorecard, publish?: PublishStageResult): DiscordEmbed {
-  const { revenue, costs } = scorecard;
-  const { current, previous, referenceMonth, totalOpen } = revenue;
+  const currLabel = yearMonthLabel(scorecard.referenceMonth);
 
-  const currLabel = yearMonthLabel(referenceMonth);
-  const prevLabel = yearMonthLabel(prevYearMonth(referenceMonth));
+  // Build nodes from scorecard data
+  const revenueNodes = revenueToNodes(scorecard.revenue);
+  const costsNodes = costsToNodes(scorecard.costs);
+  const allNodes = [...revenueNodes, ...costsNodes];
 
-  const cmp = (prev: number, curr: number) =>
-    `vs. ${prevLabel}: ${fmtBRL(prev)} (${fmtDelta(prev, curr)})`;
+  // Render nodes to Discord fields
+  const scorecardFields = renderToDiscordFields(allNodes);
 
-  const costsSamePeriodNote =
-    costs.samePeriodDiffPct !== null
-      ? `vs. mesmo periodo ${prevLabel}: ${fmtBRL(costs.previous.totalCost)} (${costs.samePeriodDiffPct >= 0 ? "+" : ""}${costs.samePeriodDiffPct.toFixed(1)}%)`
-      : `sem dados do mesmo periodo em ${prevLabel}`;
-
+  // Add metadata fields
   const fields: DiscordEmbed["fields"] = [
-    field(
-      "Invoiced",
-      `Invoices emitted in ${currLabel}`,
-      fmtBRL(current.billedAmount),
-      cmp(previous.billedAmount, current.billedAmount),
-    ),
-    field(
-      "Cash In",
-      `Receivables confirmed in ${currLabel}`,
-      fmtBRL(current.receivedAmount),
-      cmp(previous.receivedAmount, current.receivedAmount),
-    ),
-    field(
-      "Expected Cash In",
-      `All unpaid receivables due on or before end of ${currLabel}`,
-      fmtBRL(current.expectedInflow),
-    ),
-    field(
-      "A/R",
-      "Total outstanding receivables across all months",
-      fmtBRL(totalOpen),
-    ),
-    field(
-      "Infra GCP MTD",
-      `Custo acumulado (primeiros ${costs.daysElapsed} dias de ${currLabel})`,
-      fmtBRL(costs.current.totalCost),
-      costsSamePeriodNote,
-    ),
-    field(
-      "Infra GCP Projecao EOM",
-      `Estimativa para fim de ${currLabel}`,
-      fmtBRL(costs.projectedEOM),
-      `mes anterior total: ${fmtBRL(costs.previousMonthTotal)}`,
-    ),
+    ...scorecardFields,
     { name: "runId", value: `\`${scorecard.runId}\``, inline: false },
   ];
 
@@ -427,3 +362,4 @@ export default {
     );
   },
 } satisfies ExportedHandler<Env>;
+
